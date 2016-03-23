@@ -1,0 +1,7 @@
+bs4
+lasagne
+nltk
+numpy
+scipy
+sklearn
+theano

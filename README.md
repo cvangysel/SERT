@@ -3,6 +3,8 @@ Semantic Entity Retrieval Toolkit
 
 The Semantic Entity Retrieval Toolkit (SERT) is a collection of neural entity retrieval algorithms. Currently, it hosts an implementation of the log-linear model for expertise retrieval, published at [WWW 2016](http://chri.stophr.be/WWW2016-VanGysel.pdf).
 
+__NOTE__: the implementation of the neural latent vector space model (to appear at CIKM2016) will be made available soon.
+
 Prerequisites
 -------------
 

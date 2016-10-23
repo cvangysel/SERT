@@ -1,25 +1,23 @@
 #!/usr/bin/env python
 
-from __future__ import unicode_literals
-
 import sys
 
-from sert import argparse_utils, logging_utils, multiprocessing_utils, io_utils
+from cvangysel import argparse_utils, logging_utils, multiprocessing_utils, \
+    trec_utils, io_utils
 
 import multiprocessing
 from nltk.corpus import stopwords
 
 import argparse
-import cPickle as pickle
 import collections
 import logging
 import numpy as np
 import os
+import pickle
 import scipy
 from scipy import sparse
 import sklearn
 import sklearn.cross_validation
-import re
 
 #
 # Main driver.
@@ -30,8 +28,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--loglevel', type=str, default='INFO')
 
+    parser.add_argument('--seed',
+                        type=argparse_utils.positive_int,
+                        required=True)
+
     parser.add_argument('document_paths',
                         type=argparse_utils.existing_file_path, nargs='+')
+
+    parser.add_argument('--encoding', type=str, default='latin1')
 
     parser.add_argument('--assoc_path',
                         type=argparse_utils.existing_file_path, required=True)
@@ -53,8 +57,14 @@ def main():
                         type=argparse_utils.positive_int,
                         default=None)
 
+    parser.add_argument('--resample', action='store_true', default=False)
+
     parser.add_argument('--no_shuffle', action='store_true', default=False)
     parser.add_argument('--no_padding', action='store_true', default=False)
+
+    parser.add_argument('--no_instance_weights',
+                        action='store_true',
+                        default=False)
 
     parser.add_argument('--meta_output',
                         type=argparse_utils.nonexisting_file_path,
@@ -70,9 +80,12 @@ def main():
     except IOError:
         return -1
 
+    # Seed RNG.
+    np.random.seed(args.seed)
+
     logging_utils.log_module_info(np, scipy, sklearn)
 
-    ignore_words = ['<doc>', '</doc>', '<text>', '</text>']
+    ignore_words = ['<doc>', '</doc>', '<docno>', '<text>', '</text>']
     if args.remove_stopwords == 'none':
         logging.info('Stopwords will be included in instances.')
     elif args.remove_stopwords == 'nltk':
@@ -94,43 +107,47 @@ def main():
 
     logging.info('Ignoring words: %s.', ignore_words)
 
+    # TODO(cvangysel): maybe switch by encapsulated call?
     words, tokens = io_utils.extract_vocabulary(
         args.document_paths,
         min_count=args.vocabulary_min_count,
         max_vocab_size=args.vocabulary_max_size,
         min_word_size=args.vocabulary_min_word_size,
         num_workers=args.num_workers,
-        ignore_tokens=ignore_words)
+        ignore_tokens=ignore_words,
+        encoding=args.encoding)
 
     logging.info('Loading document identifiers.')
 
-    reader = TRECTextReader(args.document_paths)
+    reader = trec_utils.TRECTextReader(args.document_paths,
+                                       encoding=args.encoding)
+
     document_ids = reader.iter_document_ids(num_workers=args.num_workers)
 
     with open(args.assoc_path, 'r') as f_assocs:
-        assocs = EntityDocumentAssociations(
+        assocs = trec_utils.EntityDocumentAssociations(
             f_assocs,
             document_ids=document_ids)
 
     logging.info('Found %d unique entities.', len(assocs.entities))
 
-    logging.info('Document-per-expert stats: %s',
-                 map(lambda kv: (kv[0], len(kv[1])),
-                     sorted(assocs.documents_per_entity.iteritems())))
+    logging.info('Document-per-entity stats: %s',
+                 list(map(lambda kv: (kv[0], len(kv[1])),
+                          sorted(assocs.documents_per_entity.items()))))
 
     logging.info(
-        'Expert-per-document association stats: %s',
+        'Entity-per-document association stats: %s',
         collections.Counter(
-            map(len, assocs.entities_per_document.itervalues())).items())
+            map(len, assocs.entities_per_document.values())).items())
 
     # Estimate the position in authorship distribution.
     num_associations_distribution = np.zeros(
         assocs.max_entities_per_document, dtype=np.int32)
 
     for association_length in (
-            len(associated_experts)
-            for associated_experts in
-            assocs.entities_per_document.itervalues()):
+            len(associated_entities)
+            for associated_entities in
+            assocs.entities_per_document.values()):
         num_associations_distribution[association_length - 1] += 1
 
     logging.info('Number of associations distribution: %s',
@@ -147,8 +164,8 @@ def main():
     num_documents = 0
     num_non_associated_documents = 0
 
-    documents_per_expert = collections.defaultdict(int)
-    instances_per_expert = collections.defaultdict(int)
+    documents_per_entity = collections.defaultdict(int)
+    instances_per_entity = collections.defaultdict(int)
     instances_per_document = {}
 
     global_label_distribution = collections.defaultdict(float)
@@ -175,7 +192,8 @@ def main():
         initargs=[result_q,
                   args, assocs.entities, assocs.entities_per_document,
                   position_in_associations_distribution,
-                  tokens, words])
+                  tokens, words,
+                  args.encoding])
 
     max_document_length = 0
 
@@ -188,7 +206,13 @@ def main():
     it = multiprocessing_utils.QueueIterator(
         pool, worker_result, result_q)
 
+    def _extract_key(obj):
+        return tuple(sorted(obj))
+
     num_labels = 0
+    num_instances = 0
+
+    instances_per_label = collections.defaultdict(list)
 
     while True:
         try:
@@ -212,20 +236,23 @@ def main():
                                       num_instances_for_doc)
 
             # For statistical purposes.
-            for expert_id in assocs.entities_per_document[document_id]:
-                documents_per_expert[expert_id] += 1
+            for entity_id in assocs.entities_per_document[document_id]:
+                documents_per_entity[entity_id] += 1
 
             # For statistical purposes.
-            for expert_id in assocs.entities_per_document[document_id]:
-                instances_per_expert[expert_id] += num_instances_for_doc
+            for entity_id in assocs.entities_per_document[document_id]:
                 num_labels += num_instances_for_doc
 
             # Aggregate.
-            instances_and_labels.extend(document_instances_and_labels)
+            instances_per_label[
+                _extract_key(document_label.keys())].extend(
+                document_instances_and_labels)
+
+            num_instances += len(document_instances_and_labels)
 
             # Some more accounting.
-            for expert_id, mass in document_label.iteritems():
-                global_label_distribution[expert_id] += \
+            for entity_id, mass in document_label.items():
+                global_label_distribution[entity_id] += \
                     num_instances_for_doc * mass
         else:
             num_non_associated_documents += 1
@@ -235,29 +262,70 @@ def main():
     logging.info('Global unnormalized distribution: %s',
                  global_label_distribution)
 
-    logging.info(
-        'Documents-per-indexed-expert stats (mean=%.2f, std_dev=%.2f): %s',
-        np.mean(documents_per_expert.values()),
-        np.std(documents_per_expert.values()),
-        sorted(documents_per_expert.iteritems()))
+    if args.resample:
+        num_entities = len(instances_per_label)
+        avg_instances_per_doc = (
+            float(num_instances) / float(num_entities))
+
+        min_instances_per_entity = int(avg_instances_per_doc)
+
+        logging.info('Setting number of sampled instances '
+                     'to %d per document.',
+                     avg_instances_per_doc)
+
+    for label in list(instances_per_label.keys()):
+        label_instances_and_labels = instances_per_label.pop(label)
+
+        if not label_instances_and_labels:
+            logging.warning('Label %s has no instances; skipping.', label)
+
+            continue
+
+        label_num_instances = len(label_instances_and_labels)
+
+        if args.resample:
+            assert min_instances_per_entity > 0
+
+            label_instances_and_labels_sample = []
+        else:
+            label_instances_and_labels_sample = \
+                label_instances_and_labels
+
+        while (len(label_instances_and_labels_sample) <
+               min_instances_per_entity):
+            label_instances_and_labels_sample.append(
+                label_instances_and_labels[
+                    np.random.randint(label_num_instances)])
+
+        for entity_id in label:
+            instances_per_entity[entity_id] += len(
+                label_instances_and_labels_sample)
+
+        instances_and_labels.extend(label_instances_and_labels_sample)
 
     logging.info(
-        'Instances-per-indexed-expert stats '
+        'Documents-per-indexed-entity stats (mean=%.2f, std_dev=%.2f): %s',
+        np.mean(list(documents_per_entity.values())),
+        np.std(list(documents_per_entity.values())),
+        sorted(documents_per_entity.items()))
+
+    logging.info(
+        'Instances-per-indexed-entity stats '
         '(mean=%.2f, std_dev=%.2f, min=%d, max=%d): %s',
-        np.mean(instances_per_expert.values()),
-        np.std(instances_per_expert.values()),
-        np.min(instances_per_expert.values()),
-        np.max(instances_per_expert.values()),
-        sorted(instances_per_expert.iteritems()))
+        np.mean(list(instances_per_entity.values())),
+        np.std(list(instances_per_entity.values())),
+        np.min(instances_per_entity.values()),
+        np.max(instances_per_entity.values()),
+        sorted(instances_per_entity.items()))
 
     logging.info(
         'Instances-per-document stats (mean=%.2f, std_dev=%.2f, max=%d).',
-        np.mean(instances_per_document.values()),
-        np.std(instances_per_document.values()),
+        np.mean(list(instances_per_document.values())),
+        np.std(list(instances_per_document.values())),
         max_document_length)
 
     logging.info('Observed %d documents of which %d (ratio=%.2f) '
-                 'are not associated with an expert.',
+                 'are not associated with an entity.',
                  num_documents, num_non_associated_documents,
                  (float(num_non_associated_documents) / num_documents))
 
@@ -277,25 +345,25 @@ def main():
         (float(num_validation_instances) /
          (num_training_instances + num_validation_instances)))
 
-    # Figure out if there are any experts with no instances, and
+    # Figure out if there are any entities with no instances, and
     # do not consider them during training.
-    expert_indices = {}
-    expert_indices_inv = {}
+    entity_indices = {}
+    entity_indices_inv = {}
 
-    for expert_id, num_instances in instances_per_expert.iteritems():
+    for entity_id, num_instances in instances_per_entity.items():
         if not num_instances:
             continue
 
-        expert_index = len(expert_indices)
+        entity_index = len(entity_indices)
 
-        expert_indices[expert_id] = expert_index
-        expert_indices_inv[expert_index] = expert_id
+        entity_indices[entity_id] = entity_index
+        entity_indices_inv[entity_index] = entity_id
 
-    logging.info('Retained %d experts after instance creation.',
-                 len(expert_indices))
+    logging.info('Retained %d entities after instance creation.',
+                 len(entity_indices))
 
-    directories = map(os.path.dirname,
-                      [args.meta_output, args.data_output])
+    directories = list(map(os.path.dirname,
+                           [args.meta_output, args.data_output]))
 
     # Create those directories.
     [os.makedirs(directory) for directory in directories
@@ -304,7 +372,7 @@ def main():
     # Dump vocabulary.
     with open(args.meta_output, 'wb') as f:
         for obj in (args, words, tokens,
-                    expert_indices_inv, assocs.documents_per_entity):
+                    entity_indices_inv, assocs.documents_per_entity):
             pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
 
         logging.info('Saved vocabulary to "%s".', args.meta_output)
@@ -317,26 +385,27 @@ def main():
     x_train, y_train = instances_and_labels_to_arrays(
         training_instances_and_labels,
         args.window_size,
-        expert_indices,
+        entity_indices,
         instance_dtype,
         not args.no_shuffle)
 
     data['x_train'] = x_train
     data['y_train'] = y_train
 
-    w_train = np.fromiter(
-        (float(max_document_length) / instances_per_document[doc_id]
-         for doc_id, _, _ in training_instances_and_labels),
-        np.float32, len(training_instances_and_labels))
+    if not args.no_instance_weights:
+        w_train = np.fromiter(
+            (float(max_document_length) / instances_per_document[doc_id]
+             for doc_id, _, _ in training_instances_and_labels),
+            np.float32, len(training_instances_and_labels))
 
-    assert w_train.shape == (x_train.shape[0],)
+        assert w_train.shape == (x_train.shape[0],)
 
-    data['w_train'] = w_train
+        data['w_train'] = w_train
 
     x_validate, y_validate = instances_and_labels_to_arrays(
         validation_instances_and_labels,
         args.window_size,
-        expert_indices,
+        entity_indices,
         instance_dtype,
         not args.no_shuffle)
 
@@ -348,198 +417,38 @@ def main():
 
     logging.info('Saved data sets.')
 
-    logging.info('Expert-per-document association stats: {0}'.format(
+    logging.info('Entity-per-document association stats: {0}'.format(
         collections.Counter(
-            map(len, assocs.entities_per_document.itervalues())).items()))
+            map(len, assocs.entities_per_document.values())).items()))
 
-    logging.info('Documents-per-expert stats: {0}'.format(
+    logging.info('Documents-per-entity stats: {0}'.format(
         collections.Counter(
-            map(len, assocs.documents_per_entity.itervalues())).items()))
+            map(len, assocs.documents_per_entity.values())).items()))
 
     logging.info('Done.')
-
-#
-# Utilities for parsing TRECtext and association files.
-#
-
-
-def _parse_trectext(iter, ignore_content=False):
-    start_doc_re = re.compile(r'^<DOC>$')
-    end_doc_re = re.compile(r'^</DOC>$')
-
-    start_doc_hdr = re.compile(r'^<DOCHDR>$')
-    end_doc_hdr = re.compile(r'^</DOCHDR>$')
-
-    doc_id_re = re.compile(r'^<DOCNO>\s*(.*)\s*</DOCNO>$')
-
-    current_document = None
-    current_content = None
-
-    for line in iter:
-        doc_id_match = doc_id_re.match(line)
-
-        if line.isspace():
-            continue
-        elif start_doc_re.match(line):
-            assert current_document is None
-
-            current_document = {
-                'id': None,
-                'header': [],
-                'content': [],
-            }
-
-            current_content = current_document['content']
-        elif end_doc_re.match(line):
-            assert current_document is not None
-
-            yield current_document['id'], current_document['content']
-
-            current_document = None
-            current_content = None
-        elif start_doc_hdr.match(line):
-            assert current_document is not None
-            assert current_document['id'] is not None
-            assert not current_document['content']
-
-            current_content = current_document['header']
-        elif end_doc_hdr.match(line):
-            assert current_document is not None
-            assert current_document['id'] is not None
-            assert not current_document['content']
-
-            current_content = current_document['content']
-        elif doc_id_match:
-            assert current_document is not None
-            assert current_document['id'] is None
-
-            current_document['id'] = doc_id_match.group(1)
-        else:
-            if current_document is None:
-                logging.error(
-                    'Encountered input outside of document context: %s', line)
-
-                continue
-            elif current_document['id'] is None:
-                logging.error(
-                    'Encountered input before document identifier: %s', line)
-
-                continue
-            elif current_content is None:
-                logging.error(
-                    'Encountered input within document without context: %s',
-                    line)
-
-                continue
-
-            if ignore_content:
-                continue
-
-            line = line.strip()
-
-            current_content.append(io_utils.filter_non_ascii(line))
-
-
-def _iter_trectext_document_ids_worker(document_path):
-    logging.info('Iterating over %s.', document_path)
-
-    with open(document_path, 'r') as f:
-        return [doc_id for doc_id, _ in _parse_trectext(f)]
-
-
-class TRECTextReader(object):
-
-    def __init__(self, document_paths):
-        self.document_paths = document_paths
-
-    def iter_document_ids(self, num_workers=1):
-        document_ids = set()
-
-        pool = multiprocessing.Pool(num_workers)
-
-        for chunk_document_ids in pool.map(
-                _iter_trectext_document_ids_worker, self.document_paths):
-            document_ids.update(set(chunk_document_ids))
-
-        return document_ids
-
-    def iter_documents(self, replace_digits=True, strip_html=True):
-        digit_regex = re.compile('\d+')
-
-        for document_path in self.document_paths:
-            logging.info('Iterating over %s.', document_path)
-
-            with open(document_path, 'r') as f:
-                for doc_id, text in _parse_trectext(f):
-                    text = ' '.join(text)
-
-                    if strip_html:
-                        text = io_utils.strip_html(text)
-
-                    if replace_digits:
-                        text = digit_regex.sub('<num>', text)
-
-                    yield doc_id, text
-
-
-class EntityDocumentAssociations(object):
-
-    def __init__(self, f, document_ids=None, max_unique_entities=False):
-        self.entities = set()
-
-        self.entities_per_document = collections.defaultdict(set)
-        self.documents_per_entity = collections.defaultdict(set)
-
-        self.max_entities_per_document = 0
-        self.num_associations = 0
-
-        for entity_id, document_id, _ in (
-                assoc.strip().split() for assoc in f):
-            if document_ids is not None and document_id not in document_ids:
-                continue
-
-            # If we only want to keep track of a maximum number of entities.
-            if max_unique_entities:
-                # Check if we already know the entity, if so, carry on.
-                if entity_id in self.entities:
-                    pass
-                # If not, verify if we are still below the maximum. If not,
-                # jump to next line.
-                elif len(self.entities) >= max_unique_entities:
-                    continue
-
-            self.entities.add(entity_id)
-
-            self.entities_per_document[document_id].add(entity_id)
-            self.max_entities_per_document = max(
-                self.max_entities_per_document,
-                len(self.entities_per_document[document_id]))
-
-            self.documents_per_entity[entity_id].add(document_id)
-
-            self.num_associations += 1
 
 #
 # Worker functions.
 #
 
 
-def _candidate_centric_label(expert_ids):
-    distribution = dict((expert_id, 1.0) for expert_id in expert_ids)
+def _candidate_centric_label(entity_ids):
+    distribution = dict((entity_id, 1.0) for entity_id in entity_ids)
 
     return distribution
 
 
 def prepare_initializer(
         _result_queue,
-        _args, _experts, _document_assocs,
+        _args, _entities, _document_assocs,
         _position_in_association_distribution,
-        _tokens, _words):
+        _tokens, _words,
+        _encoding):
     prepare_worker.result_queue = _result_queue
 
     prepare_worker.args = _args
 
-    prepare_worker.experts = _experts
+    prepare_worker.entities = _entities
     prepare_worker.document_assocs = _document_assocs
 
     prepare_worker.position_in_associations_distribution = \
@@ -548,20 +457,23 @@ def prepare_initializer(
     prepare_worker.tokens = _tokens
     prepare_worker.words = _words
 
-    prepare_worker.documents_per_expert_index = \
+    prepare_worker.encoding = _encoding
+
+    prepare_worker.documents_per_entity_index = \
         collections.defaultdict(int)
 
-    for expert_id in (
-            expert_id for experts in
-            prepare_worker.document_assocs.itervalues()
-            for expert_id in experts):
-        prepare_worker.documents_per_expert_index[expert_id] += 1
+    for entity_id in (
+            entity_id for entities in
+            prepare_worker.document_assocs.values()
+            for entity_id in entities):
+        prepare_worker.documents_per_entity_index[entity_id] += 1
 
     logging.info('Worker initialized.')
 
 
 def prepare_worker_(document_path):
-    reader = TRECTextReader([document_path])
+    reader = trec_utils.TRECTextReader([document_path],
+                                       encoding=prepare_worker.encoding)
     num_documents = 0
 
     for doc_id, doc_text in reader.iter_documents(replace_digits=True,
@@ -599,12 +511,12 @@ def prepare_worker_(document_path):
             padding_token=padding_token,
             callback=_callback)
 
-        # To determine the matrix indices of the experts associated with
+        # To determine the matrix indices of the entities associated with
         # the document.
-        expert_ids = [expert_id for expert_id in
+        entity_ids = [entity_id for entity_id in
                       prepare_worker.document_assocs[doc_id]]
 
-        label = _candidate_centric_label(expert_ids)
+        label = _candidate_centric_label(entity_ids)
         partition_function = float(sum(label.values()))
 
         for index in label:
@@ -671,8 +583,8 @@ def instances_and_labels_to_arrays(instances,
         assert isinstance(instance_label, dict)
 
         instance_col_ind, instance_data = zip(
-            *sorted((class_mapping[expert_id], mass)
-                    for expert_id, mass in instance_label.iteritems()))
+            *sorted((class_mapping[entity_id], mass)
+                    for entity_id, mass in instance_label.items()))
 
         data.extend(instance_data)
         row_ind.extend([i] * len(instance_data))

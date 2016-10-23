@@ -1,0 +1,3 @@
+[submodule "cvangysel-common"]
+	path = cvangysel-common
+	url = https://github.com/cvangysel/cvangysel-common.git

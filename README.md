@@ -1,47 +1,60 @@
 Semantic Entity Retrieval Toolkit
 =================================
 
-The Semantic Entity Retrieval Toolkit (SERT) is a collection of neural entity retrieval algorithms. Currently, it hosts an implementation of the log-linear model for expertise retrieval, published at [WWW 2016](http://chri.stophr.be/WWW2016-VanGysel.pdf).
+The Semantic Entity Retrieval Toolkit (SERT) is a collection of neural entity retrieval algorithms.
 
-__NOTE__: the implementation of the neural latent vector space model (to appear at CIKM2016) will be made available soon.
+Currently, it hosts an implementation of the following models:
+
+   * the [log-linear model for expertise retrieval](EXPERT_FINDING.md), published at [WWW 2016](https://arxiv.org/abs/1608.06651)
+   * the [latent vector space model for product search](PRODUCT_SEARCH.md), published at [CIKM 2016](https://arxiv.org/abs/1608.07253)
 
 Prerequisites
 -------------
 
-SERT requires Python 2.7 and assorted [modules](requirements.txt). If you wish to train your models on GPGPUs, you will need a GPU compatible with [Theano](http://deeplearning.net/software/theano/).
+SERT requires Python 3.5 and assorted [modules](requirements.txt). The [trec_eval](https://github.com/usnistgov/trec_eval) utility is required for evaluation and the end-to-end scripts. If you wish to train your models on GPGPUs, you will need a GPU compatible with [Theano](http://deeplearning.net/software/theano/).
 
-Usage
------
+Getting started
+---------------
 
-To replicate the experiments of the paper on **unsupervised and semantic expertise finding**, have a look at [this script](W3C-expert-finding.sh) which builds a log-linear model on the [W3C collection](http://research.microsoft.com/en-us/um/people/nickcr/w3c-summary.html). The script then evaluates the model on the [2005](http://trec.nist.gov/data/t14_enterprise.html) and [2006](http://trec.nist.gov/data/t15_enterprise.html) editions of TREC Enterprise track.
+To begin, create a virtual Python environment and install dependencies:
 
-    [cvangysel@ilps SERT] ./W3C-expert-finding.sh <path-to-W3C-corpus> <path-to-nonexisting-temporary-directory>
+    [cvangysel@ilps cvangysel] git clone git@github.com:cvangysel/SERT.git
+    [cvangysel@ilps cvangysel] cd SERT
 
-    Verifying W3C corpus.
+    [cvangysel@ilps SERT] virtualenv SERT-dev
+    Using base prefix '/Users/cvangysel/anaconda3'
+    New python executable in /home/cvangysel/SERT/SERT-dev/bin/python
+    Installing setuptools, pip, wheel...done.
 
-    Creating output directory.
+    [cvangysel@ilps SERT] source SERT-dev/bin/activate
 
-    Fetching topics and relevance judgments.
+    (SERT-dev) [cvangysel@ilps SERT] pip install -r requirements.txt
 
-    Constructing log-linear model on W3C collection.
-
-    Evaluating on TREC Enterprise tracks.
-	2005 Enterprise Track: ndcg=0.5474; map=0.2603; recip_rank=0.6209; P_5=0.4098;
-	2006 Enterprise Track: ndcg=0.7883; map=0.4937; recip_rank=0.8834; P_5=0.7000;
+Afterwards, follow the examples for [expertise retrieval](EXPERT_FINDING.md) or [product search](PRODUCT_SEARCH.md).
 
 Citation
 --------
 
-If you use SERT to produce results for your scientific publication, please refer to [this paper](http://chri.stophr.be/WWW2016-VanGysel.pdf):
+If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651) or [CIKM 2016](https://arxiv.org/abs/1608.07253) papers:
 
 ```
-@inproceedings{VanGysel2016-WWW,
+@inproceedings{VanGysel2016experts,
   title={Unsupervised, Efficient and Semantic Expertise Retrieval},
   author={Van Gysel, Christophe and de Rijke, Maarten and Worring, Marcel},
   booktitle={WWW},
   volume={2016},
+  pages={1069--1079},
   year={2016},
   organization={The International World Wide Web Conferences Steering Committee}
+}
+
+@inproceedings{VanGysel2016products,
+  title={Learning Latent Vector Spaces for Product Search},
+  author={Van Gysel, Christophe and de Rijke, Maarten and Kanoulas, Evangelos},
+  booktitle={CIKM},
+  volume={2016},
+  year={2016},
+  organization={ACM}
 }
 ```
 

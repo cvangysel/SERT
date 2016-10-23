@@ -1,20 +1,21 @@
 #!/usr/bin/env python
 
-from __future__ import unicode_literals
-
 import sys
 
-from sert import argparse_utils, inference, io_utils, \
-    logging_utils, math_utils
+from cvangysel import argparse_utils, logging_utils, sklearn_utils, trec_utils
+from sert import inference, math_utils, models
 
 import argparse
-import cPickle as pickle
 import collections
 import io
 import logging
 import numpy as np
 import os
-import re
+import operator
+import pickle
+import scipy
+import scipy.spatial
+import sklearn.neighbors
 
 #
 # Main driver.
@@ -33,6 +34,10 @@ def main():
     parser.add_argument('--topics',
                         type=argparse_utils.existing_file_path, nargs='+')
 
+    parser.add_argument('--top',
+                        type=argparse_utils.positive_int,
+                        default=None)
+
     parser.add_argument('--run_out',
                         type=argparse_utils.nonexisting_file_path,
                         required=True)
@@ -45,48 +50,59 @@ def main():
         return -1
 
     with open(args.model, 'rb') as f:
-        unpickler = pickle.Unpickler(f)
-
         # Load model arguments and learned mapping.
-        model_args, predict_fn = [unpickler.load() for _ in xrange(2)]
+        model_args, predict_fn = (pickle.load(f) for _ in range(2))
 
         # Load word representations.
-        word_representations = unpickler.load()
+        word_representations = pickle.load(f)
+
+        try:
+            entity_representations = pickle.load(f)
+        except EOFError:
+            entity_representations = None
 
     with open(args.meta, 'rb') as f:
         (data_args,
          words, tokens,
-         expert_indices_inv, expert_assocs) = [
-            pickle.load(f) for _ in xrange(5)]
+         entity_indices_inv, entity_assocs) = (
+            pickle.load(f) for _ in range(5))
 
     # Parse topic files.
-    topics = parse_topics(
-        map(lambda filename: open(filename, 'rb'), args.topics))
+    topic_f = list(map(lambda filename: open(filename, 'r'), args.topics))
+    topics = trec_utils.parse_topics(topic_f)
+    [f_.close() for f_ in topic_f]
 
     model_name = os.path.basename(args.model)
 
-    # Expert profiling.
-    topics_per_expert = collections.defaultdict(list)
+    # Entity profiling.
+    topics_per_entity = collections.defaultdict(list)
 
-    # Expert finding.
-    experts_per_topic = collections.defaultdict(list)
+    # Entity finding.
+    entities_per_topic = collections.defaultdict(list)
 
     def ranker_callback(topic_id, top_ranked_indices, top_ranked_values):
-        for rank, (expert_internal_id, relevance) in enumerate(
+        for rank, (entity_internal_id, relevance) in enumerate(
                 zip(top_ranked_indices, top_ranked_values)):
-            expert_id = expert_indices_inv[expert_internal_id]
+            entity_id = entity_indices_inv[entity_internal_id]
 
-            # Expert profiling.
-            topics_per_expert[expert_id].append((relevance, topic_id))
+            # Entity profiling.
+            topics_per_entity[entity_id].append((relevance, topic_id))
 
-            # Expert finding.
-            experts_per_topic[topic_id].append((relevance, expert_id))
+            # Entity finding.
+            entities_per_topic[topic_id].append((relevance, entity_id))
 
     with open('{0}_debug'.format(args.run_out), 'w') as f_debug_out:
-        result_callback = LogLinearCallback(
-            args, model_args, tokens,
-            f_debug_out,
-            ranker_callback)
+        if model_args.type == models.LanguageModel:
+            result_callback = LogLinearCallback(
+                args, model_args, tokens,
+                f_debug_out,
+                ranker_callback)
+        elif model_args.type == models.VectorSpaceLanguageModel:
+            result_callback = VectorSpaceCallback(
+                entity_representations,
+                args, model_args, tokens,
+                f_debug_out,
+                ranker_callback)
 
         batcher = inference.create(
             predict_fn, word_representations,
@@ -95,14 +111,14 @@ def main():
 
         logging.info('Batching queries using %s.', batcher)
 
-        for q_id, (topic_id, terms) in enumerate(topics.iteritems()):
+        for q_id, (topic_id, terms) in enumerate(topics.items()):
             if topic_id not in topics:
                 logging.error('Topic "%s" not found in topic list.', topic_id)
 
                 continue
 
             # Do not replace numeric tokens in queries.
-            query_terms = parse_query(terms)
+            query_terms = trec_utils.parse_query(terms)
 
             query_tokens = []
 
@@ -129,127 +145,17 @@ def main():
 
         batcher.process()
 
-    # Expert profiling.
+    # Entity profiling.
     with io.open('{0}_ep'.format(args.run_out),
                  'w', encoding='utf8') as out_ep_run:
-        write_run(model_name, topics_per_expert, out_ep_run)
+        trec_utils.write_run(model_name, topics_per_entity, out_ep_run)
 
-    # Expert finding.
+    # Entity finding.
     with io.open('{0}_ef'.format(args.run_out),
                  'w', encoding='utf8') as out_ef_run:
-        write_run(model_name, experts_per_topic, out_ef_run)
+        trec_utils.write_run(model_name, entities_per_topic, out_ef_run)
 
     logging.info('Saved run to %s.', args.run_out)
-
-
-#
-# Auxilary functions input/output.
-#
-
-def parse_topics(file_or_files,
-                 max_topics=sys.maxint, delimiter=';', encoding='utf8'):
-    assert max_topics >= 0 or max_topics is None
-
-    topics = collections.OrderedDict()
-
-    if not isinstance(file_or_files, list) and \
-            not isinstance(file_or_files, tuple):
-        file_or_files = [file_or_files]
-
-    for f in file_or_files:
-        assert isinstance(f, file)
-
-        if f.encoding is not None and f.encoding != encoding:
-            raise RuntimeError(
-                'Encoding of file object different from expected '
-                '(actual={0}, expected={1}).'.format(
-                    f.encoding, encoding))
-
-        for line in f:
-            if not isinstance(line, unicode):
-                line = line.decode(encoding)
-
-            line = line.strip()
-            if not line:
-                continue
-
-            topic_id, terms = line.strip().split(delimiter, 1)
-
-            if topic_id in topics and (topics[topic_id] != terms):
-                    logging.error('Duplicate topic "%s" (%s vs. %s).',
-                                  topic_id,
-                                  topics[topic_id],
-                                  terms)
-
-            topics[topic_id] = terms
-
-            if max_topics > 0 and len(topics) >= max_topics:
-                break
-
-    return topics
-
-remove_parentheses_re = re.compile(r'\((.*)\)')
-
-
-def parse_query(unsplitted_terms):
-    unsplitted_terms = remove_parentheses_re.sub(
-        r'\1', unsplitted_terms.strip())
-    unsplitted_terms = unicode(unsplitted_terms.replace('/', ' '))
-    unsplitted_terms = unicode(unsplitted_terms.replace('-', ' '))
-
-    return list(io_utils.token_stream(
-        io_utils.lowercased_stream(
-            io_utils.filter_non_latin_stream(
-                io_utils.filter_non_alphanumeric_stream(
-                    iter(unsplitted_terms)))), eos_chars=[]))
-
-
-def write_run(model_name, data, out_f,
-              max_objects_per_query=sys.maxint,
-              skip_sorting=False):
-    """
-    Write a run to an output file.
-
-    Parameters:
-        - model_name: identifier of run.
-        - data: dictionary mapping topic_id to object_assesments;
-            object_assesments is an iterable (list or tuple) of
-            (relevance, object_id) pairs.
-
-            The object_assesments iterable is sorted by decreasing order.
-        - out_f: output file stream.
-        - max_objects_per_query: cut-off for number of objects per query.
-    """
-    for subject_id, object_assesments in data.iteritems():
-        if not object_assesments:
-            logging.warning('Received empty ranking for %s; ignoring.',
-                            subject_id)
-
-            continue
-
-        # Probe types, to make sure everything goes alright.
-        # assert isinstance(object_assesments[0][0], float) or \
-        #     isinstance(object_assesments[0][0], np.float32)
-        assert isinstance(object_assesments[0][1], basestring)
-
-        if not skip_sorting:
-            object_assesments = sorted(object_assesments, reverse=True)
-
-        if max_objects_per_query < sys.maxint:
-            object_assesments = object_assesments[:max_objects_per_query]
-
-        if isinstance(subject_id, basestring):
-            subject_id = subject_id.decode('utf8')
-
-        for rank, (relevance, object_id) in enumerate(object_assesments):
-            out_f.write(
-                '{subject} Q0 {object} {rank} {relevance} '
-                '{model_name}\n'.format(
-                    subject=subject_id,
-                    object=object_id.decode('utf8'),
-                    rank=rank + 1,
-                    relevance=relevance,
-                    model_name=model_name))
 
 
 #
@@ -286,6 +192,9 @@ class Callback(object):
     def process(self, payload, distribution, topic_id):
         raise NotImplementedError()
 
+    def should_average_input(self):
+        raise NotImplementedError()
+
 
 class LogLinearCallback(Callback):
 
@@ -293,7 +202,7 @@ class LogLinearCallback(Callback):
         super(LogLinearCallback, self).__init__(*args, **kwargs)
 
     def process(self, payload, distribution, topic_id):
-        terms = map(lambda id: self.tokens[id], payload)
+        terms = list(map(lambda id: self.tokens[id], payload))
         term_entropies = compute_normalised_entropy(
             distribution, base=2)
 
@@ -323,6 +232,143 @@ class LogLinearCallback(Callback):
 
         self.rank_callback(topic_id, top_ranked_indices, top_ranked_values)
 
+    def should_average_input(self):
+        return False
+
+
+class VectorSpaceCallback(Callback):
+
+    def __init__(self, entity_representations, *args, **kwargs):
+        super(VectorSpaceCallback, self).__init__(*args, **kwargs)
+
+        logging.info(
+            'Initializing k-NN for entity representations of shape %s.',
+            entity_representations.shape)
+
+        n_neighbors = self.args.top
+
+        if n_neighbors is None:
+            logging.warning(
+                'Parameter k not set; defaulting to all entities (k=%d).',
+                entity_representations.shape[0])
+        elif n_neighbors > entity_representations.shape[0]:
+            logging.warning(
+                'Parameter k exceeds number of entities; '
+                'defaulting to all entities (k=%d).',
+                entity_representations.shape[0])
+
+            n_neighbors = None
+
+        self.entity_representation_distance = 'cosine'
+
+        if self.entity_representation_distance == 'cosine':
+            self.entity_representation_distance = 'euclidean'
+            self.normalize_representations = True
+        else:
+            self.normalize_representations = False
+
+        if self.normalize_representations:
+            entity_repr_l2_norms = np.linalg.norm(
+                entity_representations, axis=1)[:, np.newaxis]
+
+            entity_representations /= entity_repr_l2_norms
+
+            logging.debug('Term projections will be normalized.')
+
+        self.entity_representations = entity_representations
+
+        if n_neighbors:
+            nn_impl = sklearn_utils.neighbors_algorithm(
+                self.entity_representation_distance)
+
+            logging.info('Using %s as distance metric in entity space '
+                         'with NearestNeighbors %s implementation.',
+                         self.entity_representation_distance, nn_impl)
+
+            self.entity_neighbors = sklearn.neighbors.NearestNeighbors(
+                n_neighbors=n_neighbors,
+                algorithm=nn_impl,
+                metric=self.entity_representation_distance)
+
+            self.entity_neighbors.fit(entity_representations)
+            self.entity_avg = entity_representations.mean(axis=1)
+
+            logging.info('Entity k-NN params: %s',
+                         self.entity_neighbors.get_params())
+        else:
+            logging.info('Using %s as distance metric in entity space.',
+                         self.entity_representation_distance)
+
+            self.entity_neighbors = None
+
+    def query(self, centroids):
+        if self.entity_neighbors is not None:
+            distances, indices = self.entity_neighbors.kneighbors(centroids)
+
+            return distances, indices
+        else:
+            pairwise_distances = scipy.spatial.distance.cdist(
+                centroids, self.entity_representations,
+                metric=self.entity_representation_distance)
+
+            distances = np.sort(pairwise_distances, axis=1)
+            indices = pairwise_distances.argsort(axis=1)\
+                .argsort(axis=1).argsort(axis=1)
+
+            return distances, indices
+
+    def process(self, payload, result, topic_id):
+        terms = list(map(lambda id: self.tokens[id], payload))
+
+        term_projections = inference.aggregate_distribution(
+            result, mode='identity', axis=0)
+
+        if term_projections.ndim == 1:
+            term_projections = term_projections.reshape(1, -1)
+
+        _, entity_representation_size = term_projections.shape
+        assert(entity_representation_size ==
+               self.model_args.entity_representation_size)
+
+        if self.normalize_representations:
+            term_projections_l2_norm = \
+                np.linalg.norm(term_projections, axis=1)[:, np.newaxis]
+            term_projections /= term_projections_l2_norm
+
+        logging.debug('Querying kneighbors for %s.', terms)
+
+        distances, indices = self.query(term_projections)
+
+        assert indices.shape[0] == term_projections.shape[0]
+
+        candidates = collections.defaultdict(float)
+
+        assert indices.shape[0] == 1
+
+        for term in range(indices.shape[0]):
+            term_indices = indices[term, :]
+
+            for rank, candidate in enumerate(term_indices):
+                matching_score = np.sum(
+                    self.entity_representations[candidate, :] *
+                    term_projections[term, :])
+
+                if self.normalize_representations:
+                    matching_score = (matching_score + 1.0) / 2.0
+
+                candidates[candidate] += matching_score
+
+        top_ranked_indices, top_ranked_values = \
+            map(np.array, zip(
+                *sorted(candidates.items(),
+                        reverse=True,
+                        key=operator.itemgetter(1))))
+
+        self.rank_callback(topic_id, top_ranked_indices, top_ranked_values)
+
+    def should_average_input(self):
+        return True
+
 
 def compute_normalised_entropy(distribution, base=2):
     assert distribution.ndim == 2
@@ -331,7 +377,7 @@ def compute_normalised_entropy(distribution, base=2):
 
     entropies = [
         math_utils.entropy(distribution[i, :], base=base, normalize=True)
-        for i in xrange(distribution.shape[0])]
+        for i in range(distribution.shape[0])]
 
     return entropies
 

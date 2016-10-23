@@ -1,5 +1,3 @@
-from __future__ import unicode_literals
-
 import logging
 import numpy as np
 
@@ -12,10 +10,17 @@ def create(predict_fn, word_representations,
     instance_dtype = np.min_scalar_type(vocabulary_size - 1)
     logging.info('Instance elements will be stored using %s.', instance_dtype)
 
-    batcher = WordBatcher(
-        predict_fn,
-        batch_size, window_size, instance_dtype,
-        result_callback)
+    if result_callback.should_average_input():
+        batcher = EmbeddingMapper(
+            predict_fn,
+            word_representations,
+            result_callback)
+    else:
+        batcher = WordBatcher(
+            predict_fn,
+            batch_size, window_size,
+            instance_dtype,
+            result_callback)
 
     return batcher
 
@@ -107,7 +112,7 @@ class WordBatcher(object):
 
             query_tokens = query_tokens[:self.window_size]
 
-        num_instances = len(query_tokens) / self.window_size
+        num_instances = len(query_tokens) // self.window_size
         if len(query_tokens) % self.window_size > 0:
             num_instances += 1
 
@@ -124,7 +129,7 @@ class WordBatcher(object):
 
         self.requests.append((num_instances, query_tokens, kwargs))
 
-        for i in xrange(num_instances):
+        for i in range(num_instances):
             assert query_tokens
 
             instance_length = min(len(query_tokens), self.window_size)
@@ -136,6 +141,30 @@ class WordBatcher(object):
             query_tokens = query_tokens[instance_length:]
 
             self.num_used_instances += 1
+
+
+class EmbeddingMapper(object):
+
+    def __init__(self, predict_fn, word_representations, result_callback):
+        self.predict_fn = predict_fn
+
+        self.word_representations = word_representations
+
+        if result_callback is not None:
+            assert hasattr(result_callback, '__call__')
+
+        self.callback = result_callback
+
+    def process(self):
+        pass
+
+    def submit(self, query_tokens, **kwargs):
+        avg_word_embedding = self.word_representations[
+            query_tokens, :].mean(axis=0)
+
+        result = self.predict_fn(avg_word_embedding)
+
+        self.callback(query_tokens, result, **kwargs)
 
 
 def aggregate_distribution(distribution, mode, axis):

@@ -35,7 +35,7 @@ Afterwards, follow the examples for [expertise retrieval](EXPERT_FINDING.md) or 
 Citation
 --------
 
-If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651) or [CIKM 2016](https://arxiv.org/abs/1608.07253) papers:
+If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651), [CIKM 2016](https://arxiv.org/abs/1608.07253), [ICTIR 2016](http://chri.stophr.be) and [software overview](https://arxiv.org/abs/1706.03757) papers:
 
 ```
 @inproceedings{VanGysel2016experts,
@@ -53,8 +53,26 @@ If you use SERT to produce results for your scientific publication, please refer
   author={Van Gysel, Christophe and de Rijke, Maarten and Kanoulas, Evangelos},
   booktitle={CIKM},
   volume={2016},
+  pages={165--174},
   year={2016},
   organization={ACM}
+}
+
+@inproceedings{VanGysel2017entityregularities,
+  title={Structural Regularities in Text-based Entity Vector Spaces},
+  author={Van Gysel, Christophe and de Rijke, Maarten and Kanoulas, Evangelos},
+  booktitle={ICTIR},
+  volume={2017},
+  year={2017},
+  organization={ACM}
+}
+
+@article{VanGysel2017sert,
+  title = "{Semantic Entity Retrieval Toolkit}",
+  author={Van Gysel, Christophe and de Rijke, Maarten and Kanoulas, Evangelos},
+  journal={arXiv preprint arXiv:1706.03757},
+  year={2017},
+  url={https://arxiv.org/abs/1706.03757},
 }
 ```
 

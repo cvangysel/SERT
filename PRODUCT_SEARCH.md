@@ -99,7 +99,7 @@ Afterwards, we can construct models from 4-gram using 300-dimensional word repre
 Citation
 ----
 
-If you use SERT to produce results for your scientific publication, please refer to our [CIKM 2016](https://arxiv.org/abs/1608.07253) paper on product search:
+If you use SERT to produce results for your scientific publication, please refer to our [CIKM 2016](https://arxiv.org/abs/1608.07253) paper on product search and our [software overview](https://arxiv.org/abs/1706.03757) paper:
 
 ```
 @inproceedings{VanGysel2016products,
@@ -107,7 +107,16 @@ If you use SERT to produce results for your scientific publication, please refer
   author={Van Gysel, Christophe and de Rijke, Maarten and Kanoulas, Evangelos},
   booktitle={CIKM},
   volume={2016},
+  pages={165--174},
   year={2016},
   organization={ACM}
+}
+
+@article{VanGysel2017sert,
+  title = "{Semantic Entity Retrieval Toolkit}",
+  author={Van Gysel, Christophe and de Rijke, Maarten and Kanoulas, Evangelos},
+  journal={arXiv preprint arXiv:1706.03757},
+  year={2017},
+  url={https://arxiv.org/abs/1706.03757},
 }
 ```

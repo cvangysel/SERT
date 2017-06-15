@@ -23,7 +23,7 @@ To replicate the experiments of the paper on **unsupervised and semantic experti
 Citation
 --------
 
-If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651) paper on expert finding, our [ICTIR 2016](http://chri.stophr.be) paper on structural regularities in text-based vector spaces and our [software overview](https://arxiv.org/abs/1706.03757) paper:
+If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651) paper on expert finding, our [ICTIR 2017](http://chri.stophr.be) paper on structural regularities in text-based vector spaces and our [software overview](https://arxiv.org/abs/1706.03757) paper:
 
 ```
 @inproceedings{VanGysel2016experts,

@@ -35,7 +35,7 @@ Afterwards, follow the examples for [expertise retrieval](EXPERT_FINDING.md) or 
 Citation
 --------
 
-If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651), [CIKM 2016](https://arxiv.org/abs/1608.07253), [ICTIR 2016](http://chri.stophr.be) and [software overview](https://arxiv.org/abs/1706.03757) papers:
+If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651), [CIKM 2016](https://arxiv.org/abs/1608.07253), [ICTIR 2017](http://chri.stophr.be) and [software overview](https://arxiv.org/abs/1706.03757) papers:
 
 ```
 @inproceedings{VanGysel2016experts,

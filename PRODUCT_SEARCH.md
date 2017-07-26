@@ -112,11 +112,10 @@ If you use SERT to produce results for your scientific publication, please refer
   organization={ACM}
 }
 
-@article{VanGysel2017sert,
-  title = "{Semantic Entity Retrieval Toolkit}",
+@inproceedings{VanGysel2017sert,
+  title={Semantic Entity Retrieval Toolkit},
   author={Van Gysel, Christophe and de Rijke, Maarten and Kanoulas, Evangelos},
-  journal={arXiv preprint arXiv:1706.03757},
+  booktitle={SIGIR 2017 Workshop on Neural Information Retrieval (Neu-IR'17)},
   year={2017},
-  url={https://arxiv.org/abs/1706.03757},
 }
 ```

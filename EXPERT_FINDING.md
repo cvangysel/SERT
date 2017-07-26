@@ -23,7 +23,7 @@ To replicate the experiments of the paper on **unsupervised and semantic experti
 Citation
 --------
 
-If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651) paper on expert finding, our [ICTIR 2017](http://chri.stophr.be) paper on structural regularities in text-based vector spaces and our [software overview](https://arxiv.org/abs/1706.03757) paper:
+If you use SERT to produce results for your scientific publication, please refer to our [WWW 2016](https://arxiv.org/abs/1608.06651) paper on expert finding, our [ICTIR 2017](https://arxiv.org/abs/1707.07930) paper on structural regularities in text-based vector spaces and our [software overview](https://arxiv.org/abs/1706.03757) paper:
 
 ```
 @inproceedings{VanGysel2016experts,
@@ -45,11 +45,10 @@ If you use SERT to produce results for your scientific publication, please refer
   organization={ACM}
 }
 
-@article{VanGysel2017sert,
-  title = "{Semantic Entity Retrieval Toolkit}",
+@inproceedings{VanGysel2017sert,
+  title={Semantic Entity Retrieval Toolkit},
   author={Van Gysel, Christophe and de Rijke, Maarten and Kanoulas, Evangelos},
-  journal={arXiv preprint arXiv:1706.03757},
+  booktitle={SIGIR 2017 Workshop on Neural Information Retrieval (Neu-IR'17)},
   year={2017},
-  url={https://arxiv.org/abs/1706.03757},
 }
 ```
